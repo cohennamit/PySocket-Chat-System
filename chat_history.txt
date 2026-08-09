@@ -1,0 +1,200 @@
+import socket
+import threading
+#אחראי על UI
+import tkinter as tk
+from tkinter import simpledialog, scrolledtext, messagebox, ttk 
+
+# הגדרות לאן מתחברים (חייב להתאים למה שהגדרנו בשרת)
+HOST = '127.0.0.1'
+PORT = 5555
+
+class ChatClient:
+    def __init__(self):
+        self.client_socket = None
+        self.username = ""
+        self.running = False
+
+        # --- בניית הממשק הגרפי (GUI) ---
+        self.root = tk.Tk()
+        self.root.geometry("450x600")
+        self.root.title("Chat Client - Connecting...")
+
+        # תווית שמראה אם אנחנו מחוברים ומה השם שלנו
+        self.user_label = tk.Label(self.root, text="Not Connected", font=("Arial", 12, "bold"), fg="#333")
+        self.user_label.pack(pady=5)
+
+        # אזור הצ'אט עצמו - תיבת טקסט נגללת שאי אפשר לכתוב לתוכה ישירות
+        self.chat_area = scrolledtext.ScrolledText(self.root, state='disabled', wrap=tk.WORD)
+        self.chat_area.pack(padx=10, pady=5, expand=True, fill='both')
+
+        # --- הגדרת צבעים (Tags) ---        
+
+        # 1. הודעות שאני שלחתי לכולם (ירוק בהיר)
+        self.chat_area.tag_config('me_public', foreground='black', background="#04ded3", lmargin1=50, lmargin2=50, rmargin=10)
+        
+        # 2. הודעות שאני שלחתי לפרטי (סגול/ורוד) - כדי שאדע שזה סודי
+        self.chat_area.tag_config('me_private', foreground='black', background="#bf60ab", lmargin1=50, lmargin2=50, rmargin=10)
+
+        # 3. הודעות פרטיות שקיבלתי מאחרים (אפור בהיר)
+        self.chat_area.tag_config('private', foreground='black', background='#f1f0f0', lmargin1=10, lmargin2=10, rmargin=50)
+        
+        # 4. הודעות ציבוריות שקיבלתי מאחרים (תכלת כהה יותר)
+        self.chat_area.tag_config('public', foreground='black', background='#03a8a0', lmargin1=10, lmargin2=10, rmargin=50)
+        
+        # 5. הודעות מערכת (מי התחבר/התנתק) - טקסט אפור נטוי באמצע
+        self.chat_area.tag_config('system', foreground='gray', font=("Arial", 9, "italic"), justify='center')
+
+
+        # --- אזור השליחה למטה ---
+        input_frame = tk.Frame(self.root)
+        input_frame.pack(padx=10, pady=10, fill='x')
+
+        tk.Label(input_frame, text="To:").pack(side='left')
+
+        # רשימה נפתחת (Combo Box) לבחירת למי לשלוח
+        self.target_entry = ttk.Combobox(input_frame, width=15, state="readonly")
+        self.target_entry['values'] = ["ALL"] # ברירת מחדל - לכולם
+        self.target_entry.current(0)
+        self.target_entry.pack(side='left', padx=5)
+
+        # שורת הכתיבה
+        self.msg_entry = tk.Entry(input_frame)
+        self.msg_entry.pack(side='left', expand=True, fill='x', padx=5)
+        # מאפשר לשלוח גם בלחיצה על Enter
+        self.msg_entry.bind("<Return>", self.send_message)
+
+        # כפתור השליחה
+        send_btn = tk.Button(input_frame, text="Send", command=self.send_message, bg="#bf60ab", fg="white", font=("Arial", 10, "bold"))
+        send_btn.pack(side='right')
+
+        # מה קורה כשסוגרים את החלון עם ה-X
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # מתחילים את כל התהליך
+        self.connect_to_server()
+        self.root.mainloop()
+
+    def connect_to_server(self):
+        """מטפל בהתחברות הראשונית: פתיחת סוקט וקבלת שם משתמש"""
+        self.username = simpledialog.askstring("Login", "Enter your username:", parent=self.root)
+        if not self.username:
+            self.root.destroy()
+            return
+
+        try:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect((HOST, PORT))
+            # הדבר הראשון שאנחנו שולחים זה את השם שלנו
+            self.client_socket.send(self.username.encode('utf-8'))
+            
+            # עדכון הכותרות בחלון
+            self.root.title(f"Team Rocket Chat - {self.username}")
+            self.user_label.config(text=f"Logged in as: {self.username}")
+            
+            # הפעלת ה-Thread שמקשיב להודעות
+            # (חייב להיות ב-Thread נפרד כדי לא לתקוע את הממשק הגרפי)
+            self.running = True
+            receive_thread = threading.Thread(target=self.receive_messages)
+            receive_thread.daemon = True
+            receive_thread.start()
+            
+        except ConnectionRefusedError:
+            messagebox.showerror("Error", "Could not connect to server.")
+            self.root.destroy()
+
+    def receive_messages(self):
+        """הלולאה שרצה ברקע ומקבלת נתונים מהשרת"""
+        while self.running:
+            try:
+                message = self.client_socket.recv(1024).decode('utf-8')
+                if not message:
+                    break
+                
+                # טיפול במצב שהשם תפוס
+                if message == "Username taken":
+                    messagebox.showerror("Error", "Username already taken.")
+                    self.running = False
+                    self.root.destroy()
+                    break
+
+                # עדכון רשימת המשתמשים המחוברים בתיבה הנפתחת
+                if message.startswith("[USERS]"):
+                    users_str = message.replace("[USERS]", "")
+                    all_users = users_str.split(",")
+                    final_list = ["ALL"]
+                    for u in all_users:
+                        if u != self.username and u != "":
+                            final_list.append(u)
+                    
+                    # שומרים על הבחירה הנוכחית אם היא עדיין רלוונטית
+                    current_selection = self.target_entry.get()
+                    self.target_entry['values'] = final_list
+                    if current_selection in final_list:
+                        self.target_entry.set(current_selection)
+                    else:
+                        self.target_entry.current(0)
+                    continue
+
+                # מיון ההודעות לצבעים לפי התגיות שהשרת שולח
+                tag = 'system'
+                if message.startswith("[PUBLIC]"):
+                    tag = 'public'
+                elif message.startswith("[PRIVATE]"):
+                    tag = 'private'
+                elif "Welcome" in message or "disconnected" in message or "connected" in message:
+                    tag = 'system'
+                
+                self.add_to_chat(message, tag)
+                
+            except:
+                if self.running:
+                    self.add_to_chat("[ERROR] Disconnected.", 'system')
+                break
+
+    def send_message(self, event=None):
+        """שליחת הודעה לשרת ועדכון התצוגה אצלי"""
+        target = self.target_entry.get().strip()
+        msg_content = self.msg_entry.get().strip()
+
+        if not target or not msg_content:
+            return
+
+        # הרכבת ההודעה לפי הפרוטוקול: TARGET:MESSAGE
+        full_msg = f"{target}:{msg_content}"
+        
+        try:
+            self.client_socket.send(full_msg.encode('utf-8'))
+            
+            # --- טריק ויזואלי ---
+            # אנחנו מציגים את ההודעה אצלנו מיד, בלי לחכות שהשרת יחזיר אותה.
+            # ככה זה מרגיש מהיר יותר, ואנחנו שולטים בצבע (me_public / me_private)
+            if target == "ALL":
+                display_msg = f"Me (to ALL): {msg_content}"
+                self.add_to_chat(display_msg, 'me_public')
+            else:
+                display_msg = f"Me (to {target}): {msg_content}"
+                self.add_to_chat(display_msg, 'me_private')
+            # ---------------------------
+            
+            # ניקוי תיבת הכתיבה
+            self.msg_entry.delete(0, 'end')
+        except:
+            self.add_to_chat("Failed to send.", 'system')
+
+    def add_to_chat(self, message, tag):
+        """פונקציית עזר להוספת טקסט לחלון הצ'אט עם הצבע המתאים"""
+        self.chat_area.config(state='normal') # חייבים לפתוח נעילה כדי לכתוב
+        self.chat_area.insert('end', message + '\n', tag)
+        self.chat_area.insert('end', '\n', 'system') # רווח קטן בין הודעות
+        self.chat_area.yview('end') # גלילה אוטומטית למטה
+        self.chat_area.config(state='disabled') # נועלים חזרה
+
+    def on_closing(self):
+        """סגירה מסודרת של התוכנה"""
+        self.running = False
+        if self.client_socket:
+            self.client_socket.close()
+        self.root.destroy()
+
+if __name__ == "__main__":
+    ChatClient()

@@ -1,0 +1,69 @@
+import subprocess
+import time
+import sys
+import platform
+import os
+
+def run_chat_system():
+    python_exec = sys.executable
+    creation_flags = 0
+    if platform.system() == "Windows":
+        creation_flags = subprocess.CREATE_NEW_CONSOLE
+
+    # --- התיקון: מציאת הנתיב המדויק של הקבצים ---
+    # משיג את התיקייה שבה נמצא הסקריפט main.py
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # בונה נתיב מלא לקבצים (למשל: C:/Users/Me/Project/server.py)
+    server_path = os.path.join(base_dir, "server.py")
+    client_path = os.path.join(base_dir, "client.py")
+
+    print(f"Working directory: {base_dir}")
+    print("--- מערכת הצ'אט מופעלת ---")
+    
+    processes = []
+
+    try:
+        # 1. הפעלת השרת
+        print("מפעיל שרת...")
+        # שים לב: אנחנו משתמשים ב-server_path המלא ולא סתם בשם הקובץ
+        server = subprocess.Popen([python_exec, server_path], creationflags=creation_flags)
+        processes.append(server)
+        
+        time.sleep(1.5)
+
+        # 2. הפעלת לקוחות
+        print("מפעיל לקוח 1...")
+        client1 = subprocess.Popen([python_exec, client_path], creationflags=creation_flags)
+        processes.append(client1)
+        
+        time.sleep(0.5)
+
+        print("מפעיל לקוח 2...")
+        client2 = subprocess.Popen([python_exec, client_path], creationflags=creation_flags)
+        processes.append(client2)
+
+        print("\n------------------------------------------------")
+        print("המערכת רצה.")
+        print(">> סגור את חלון ה-Server כדי לכבות את הכל <<")
+        print("------------------------------------------------")
+
+        while True:
+            time.sleep(0.5) 
+            if server.poll() is not None:
+                print("\nהשרת נסגר! סוגר את הבאסטה...")
+                break 
+
+    except KeyboardInterrupt:
+        print("\nיציאה ידנית...")
+    
+    finally:
+        for p in processes:
+            if p.poll() is None:
+                p.terminate()
+        
+        print("הכל נסגר.")
+        os._exit(0)
+
+if __name__ == "__main__":
+    run_chat_system()
